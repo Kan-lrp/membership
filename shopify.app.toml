@@ -1,0 +1,53 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+# client_id 是 Shopify 平台上这个 App 的唯一身份。
+# 这个文件对应你最早初始化/关联的那个 App。
+client_id = "a0a56e1df62810e243fa3351d2e3cb75"
+name = "Membership"
+# dev 时 Shopify CLI 会把 application_url 自动替换成本地 tunnel URL。
+application_url = "https://example.com"
+# embedded=true 表示这是嵌入 Shopify Admin 里的 App，不是独立网页。
+embedded = true
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+# 会员积分 MVP 需要读订单和顾客：
+# - read_orders：订单支付 webhook/订单数据
+# - read_customers：读取订单对应顾客信息
+scopes = "read_orders,read_customers"
+
+[webhooks]
+# webhook 使用的 Shopify API 版本。
+api_version = "2026-07"
+
+  [[webhooks.subscriptions]]
+  # App 被卸载时，官方模板会删除本地 session，避免保留无效登录态。
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  # App 权限 scope 变化时，同步更新本地 session 记录。
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  # 订单支付完成后，Shopify 会请求这个地址；我们在这里给会员发积分。
+  uri = "/webhooks/orders/paid"
+  topics = [ "orders/paid" ]
+
+  [[webhooks.subscriptions]]
+  # 订单取消后，Shopify 会请求这个地址；我们在这里把已发积分冲回。
+  # 这个配置改动后，需要运行 shopify app deploy --config membership 同步到 Shopify。
+  # 否则本地有代码，Shopify 平台也不会真的把取消订单事件发过来。
+  uri = "/webhooks/orders/cancelled"
+  topics = [ "orders/cancelled" ]
+
+[auth]
+# OAuth 登录回调地址。dev 时 CLI 会自动更新成 tunnel 域名。
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[build]
+# deploy 时把这个配置一起上传到 Shopify。
+include_config_on_deploy = true
+# app dev 时自动把本地 tunnel URL 写回 Partner Dashboard。
+automatically_update_urls_on_dev = true
