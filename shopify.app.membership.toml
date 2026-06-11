@@ -35,6 +35,14 @@ api_version = "2026-07"
   uri = "/webhooks/orders/cancelled"
   topics = [ "orders/cancelled" ]
 
+  [[webhooks.subscriptions]]
+  # 订单发生退款后，Shopify 会请求这个地址；我们在这里按退款金额扣回部分积分。
+  # Shopify 的有效退款 topic 是 refunds/create，不是 orders/refunded。
+  # refunds/create 的 payload 是 Refund，所以代码里会通过 order_id 找回原订单积分流水。
+  # 同样需要 deploy 配置版本后，真实店铺退款事件才会发到本地 dev tunnel。
+  uri = "/webhooks/refunds/create"
+  topics = [ "refunds/create" ]
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 # 会员积分 MVP 需要读订单和顾客：

@@ -46,6 +46,13 @@ model Member {
   email      String?
   firstName  String?
   lastName   String?
+  // 会员状态：
+  // PENDING = 已识别为顾客，但还没有正式加入会员，不自动积分。
+  // ACTIVE = 已加入会员，可以自动积分。
+  // INACTIVE = 已停用/退出会员，不自动积分。
+  status     String   @default("PENDING")
+  // 正式成为 ACTIVE 会员的时间。
+  joinedAt   DateTime?
   // 当前会员等级，指向 LevelConfig。
   // 这里允许为空，是为了兼容已经存在的老会员数据；页面展示时也会按累计积分临时计算。
   currentLevelId String?
@@ -61,14 +68,37 @@ model Member {
   pointsAccount PointsAccount?
   // 一个会员会有很多积分流水，所以这里是数组 PointsLedger[]。
   pointsLedgers PointsLedger[]
+  // 会员时间线只记录人工操作和商家备注，不记录系统自动 webhook。
+  timelineEvents MemberTimelineEvent[]
 
   // 防止同一个 Shopify customer 被同步成多个会员。
   // 组合唯一索引的意思是：shop + customerId 这一对值不能重复。
   @@unique([shop, customerId])
   // 给后台按邮箱搜索会员预留索引。
   @@index([shop, email])
+  @@index([shop, status])
   // 后续后台按等级筛选会员时会用到。
   @@index([shop, currentLevelId])
+}
+
+model MemberTimelineEvent {
+  id           String   @id @default(cuid())
+  shop         String
+  memberId     String
+  // NOTE = 商家备注，MANUAL_ADJUST = 手动调分，STATUS_CHANGE = 状态变更。
+  type         String
+  title        String
+  content      String?
+  // 记录是谁操作的。拿不到 Shopify 员工信息时会降级为 Merchant。
+  actorName    String
+  actorEmail   String?
+  actorUserId  String?
+  metadataJson String?
+  createdAt    DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([shop, memberId, createdAt])
 }
 
 // PointsAccount 是积分账户表，保存“当前余额”和累计值。
@@ -181,6 +211,9 @@ model WebhookEvent {
   topic            String
   // Shopify 资源 id，例如订单 id；和 topic 组合后用于识别一次业务事件。
   resourceId       String
+  // 给商家看的资源名称，例如订单号 #1001。
+  // resourceId 适合程序做幂等，resourceName 适合后台页面展示。
+  resourceName     String?
   // Shopify 请求头里的 webhook id，主要用于日志排查。
   shopifyWebhookId String?
   // status 是我们自己的处理状态：PROCESSING / PROCESSED / SKIPPED / FAILED。

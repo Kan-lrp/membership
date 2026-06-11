@@ -1,5 +1,5 @@
 import { authenticate } from "../shopify.server";
-import { reversePointsForCancelledOrder } from "../models/points.server";
+import { reversePointsForCancelledOrder } from "../services/orders.server";
 
 // 这个文件对应 /webhooks/orders/cancelled 路由。
 // Shopify 的 orders/cancelled webhook 打到这个地址时，会把已发订单积分冲回。

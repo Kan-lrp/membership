@@ -1,5 +1,5 @@
 import { authenticate } from "../shopify.server";
-import { awardPointsForPaidOrder } from "../models/points.server";
+import { awardPointsForPaidOrder } from "../services/orders.server";
 
 // 这个文件对应 /webhooks/orders/paid 路由。
 // Shopify 的 orders/paid webhook 打到这个地址时，React Router 会调用 action。
