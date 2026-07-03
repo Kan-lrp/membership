@@ -109,6 +109,154 @@ export async function getMembersData(shop) {
   };
 }
 
+function getCustomerIdCandidates(customerId) {
+  const normalizedCustomerId = String(customerId ?? "").trim();
+
+  if (!normalizedCustomerId) {
+    return [];
+  }
+
+  if (normalizedCustomerId.startsWith("gid://shopify/Customer/")) {
+    return [normalizedCustomerId];
+  }
+
+  return [
+    normalizedCustomerId,
+    `gid://shopify/Customer/${normalizedCustomerId}`,
+  ];
+}
+
+export async function getCustomerMembershipData({ shop, customerId }) {
+  const customerIdCandidates = getCustomerIdCandidates(customerId);
+
+  if (!shop || customerIdCandidates.length === 0) {
+    return null;
+  }
+
+  const [levels, member] = await Promise.all([
+    getOrCreateDefaultLevelConfigs(shop),
+    db.member.findFirst({
+      where: {
+        shop,
+        customerId: {
+          in: customerIdCandidates,
+        },
+      },
+      include: {
+        currentLevel: true,
+        pointsAccount: true,
+        pointsLedgers: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+    }),
+  ]);
+
+  if (!member) {
+    return null;
+  }
+
+  const account = member.pointsAccount;
+  const lifetimeEarned = account?.lifetimeEarned ?? 0;
+  const level = getDisplayLevel(member, levels, lifetimeEarned);
+  const nextLevel =
+    member.status === MEMBER_STATUS.ACTIVE
+      ? getNextLevelForPoints(levels, lifetimeEarned)
+      : null;
+  const currentThreshold = level?.thresholdPoints ?? 0;
+  const nextThreshold = nextLevel?.thresholdPoints ?? currentThreshold;
+  const levelRange = Math.max(1, nextThreshold - currentThreshold);
+  const levelProgressPoints = Math.max(0, lifetimeEarned - currentThreshold);
+  const latestLedger = member.pointsLedgers?.[0];
+
+  return {
+    id: member.id,
+    customerId: member.customerId,
+    name: formatMemberName(member),
+    status: member.status,
+    joinedAt: member.joinedAt?.toISOString() ?? null,
+    levelName: level?.name ?? "无等级",
+    nextLevelName: nextLevel?.name ?? null,
+    isHighestLevel: member.status === MEMBER_STATUS.ACTIVE && !nextLevel,
+    pointsToNextLevel: nextLevel
+      ? Math.max(0, nextLevel.thresholdPoints - lifetimeEarned)
+      : 0,
+    levelProgressPercent: nextLevel
+      ? Math.min(100, Math.floor((levelProgressPoints / levelRange) * 100))
+      : 100,
+    balance: account?.balance ?? 0,
+    lifetimeEarned,
+    lifetimeSpent: account?.lifetimeSpent ?? 0,
+    latestLedger: latestLedger
+      ? {
+          type: latestLedger.type,
+          points: latestLedger.points,
+          reason: latestLedger.reason,
+          createdAt: latestLedger.createdAt.toISOString(),
+        }
+      : null,
+    updatedAt: (account?.updatedAt ?? member.updatedAt).toISOString(),
+  };
+}
+
+export async function createMemberFromCustomerEmail({ admin, shop, email }) {
+  // 后台手动添加会员的兜底入口。
+  // 适合 webhook 没到、但商家知道顾客邮箱时，手动把 Shopify Customer 加进本地会员表。
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
+
+  if (!normalizedEmail) {
+    throw new Error("请填写顾客邮箱。");
+  }
+
+  const response = await admin.graphql(
+    `#graphql
+      query FindCustomerByEmail($query: String!) {
+        customers(first: 1, query: $query) {
+          nodes {
+            id
+            email
+            firstName
+            lastName
+          }
+        }
+      }`,
+    {
+      variables: {
+        query: `email:${normalizedEmail}`,
+      },
+    },
+  );
+  const responseJson = await response.json();
+  const customer = responseJson.data?.customers?.nodes?.[0];
+
+  if (!customer) {
+    throw new Error("没有找到这个邮箱对应的 Shopify 顾客。");
+  }
+
+  return db.member.upsert({
+    where: {
+      shop_customerId: {
+        shop,
+        customerId: customer.id,
+      },
+    },
+    update: {
+      email: customer.email ?? normalizedEmail,
+      firstName: customer.firstName ?? null,
+      lastName: customer.lastName ?? null,
+    },
+    create: {
+      shop,
+      customerId: customer.id,
+      email: customer.email ?? normalizedEmail,
+      firstName: customer.firstName ?? null,
+      lastName: customer.lastName ?? null,
+      status: MEMBER_STATUS.PENDING,
+    },
+  });
+}
+
 export async function getMemberDetailData(shop, memberId) {
   // 单会员详情页：查会员基础信息、积分账户、当前等级和最近流水。
   const [levels, member] = await Promise.all([

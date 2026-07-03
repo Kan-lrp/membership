@@ -1,8 +1,12 @@
-import { useMemo, useState } from "react";
-import { useLoaderData } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { useFetcher, useLoaderData } from "react-router";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { getMembersData } from "../services/members.server";
+import {
+  createMemberFromCustomerEmail,
+  getMembersData,
+} from "../services/members.server";
 
 const DEFAULT_PAGE_SIZE = 10;
 const PAGE_SIZE_OPTIONS = [10, 20, 30];
@@ -25,6 +29,23 @@ export const loader = async ({ request }) => {
     // 这个值会拼到会员详情链接后面，例如 /app/members/xxx?shop=xxx.myshopify.com。
     navigationSearch: `?${navigationParams.toString()}`,
   };
+};
+
+export const action = async ({ request }) => {
+  const { admin, session } = await authenticate.admin(request);
+  const formData = await request.formData();
+
+  try {
+    await createMemberFromCustomerEmail({
+      admin,
+      shop: session.shop,
+      email: formData.get("email"),
+    });
+
+    return { ok: true, message: "会员已添加，默认状态为待开通。" };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
 };
 
 function formatDate(value) {
@@ -77,6 +98,8 @@ export default function MembersPage() {
   // loader 返回的数据会在这里拿到。
   // navigationSearch 是服务端整理好的 URL 参数，用来保证点击详情后仍然知道当前店铺是谁。
   const { members, navigationSearch } = useLoaderData();
+  const fetcher = useFetcher();
+  const shopify = useAppBridge();
   const [query, setQuery] = useState("");
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [page, setPage] = useState(1);
@@ -117,6 +140,16 @@ export default function MembersPage() {
     currentPage * pageSize,
   );
 
+  useEffect(() => {
+    if (fetcher.data?.ok) {
+      shopify.toast.show(fetcher.data.message || "会员已添加");
+    }
+
+    if (fetcher.data?.error) {
+      shopify.toast.show(fetcher.data.error);
+    }
+  }, [fetcher.data, shopify]);
+
   return (
     <s-page heading="会员列表">
       <s-section heading="会员概览">
@@ -127,6 +160,34 @@ export default function MembersPage() {
           {renderMetricBox("累计发放积分", totalLifetimeEarned)}
           {renderMetricBox("最高等级会员", highestLevelMembers)}
         </s-grid>
+      </s-section>
+
+      <s-section heading="添加会员">
+        <fetcher.Form method="post">
+          <s-stack direction="block" gap="base">
+            {fetcher.data?.error && (
+              <s-banner tone="critical">{fetcher.data.error}</s-banner>
+            )}
+            <s-grid gridTemplateColumns="1fr auto" gap="base" alignItems="end">
+              <s-email-field
+                label="顾客邮箱"
+                name="email"
+                placeholder="customer@example.com"
+                required
+              ></s-email-field>
+              <s-button
+                type="submit"
+                variant="primary"
+                {...(fetcher.state !== "idle" ? { loading: true } : {})}
+              >
+                添加会员
+              </s-button>
+            </s-grid>
+            <s-paragraph color="subdued">
+              通过邮箱查找 Shopify 顾客，找到后添加为待开通会员。
+            </s-paragraph>
+          </s-stack>
+        </fetcher.Form>
       </s-section>
 
       <s-section heading="全部会员">
