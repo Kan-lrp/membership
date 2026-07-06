@@ -1,11 +1,20 @@
 import db from "../db.server";
-import { MEMBER_STATUS } from "./constants.server";
+import { parseMoneyToCents } from "../utils/money.server";
+import {
+  MANUAL_ADJUSTMENT_SOURCE_TYPE,
+  MEMBER_STATUS,
+  ORDER_CANCELLED_SOURCE_TYPE,
+  ORDER_PAID_SOURCE_TYPE,
+  ORDER_REFUNDED_SOURCE_TYPE,
+} from "./constants.server";
+import { getOrCreateRuleConfig } from "./dashboard.server";
 import {
   getDisplayLevel,
   getLevelForPoints,
   getNextLevelForPoints,
   getOrCreateDefaultLevelConfigs,
 } from "./levels.server";
+import { calculateEarnedPoints } from "./orders.server";
 import {
   formatMemberName,
   hydrateLedgerOrderNames,
@@ -126,7 +135,140 @@ function getCustomerIdCandidates(customerId) {
   ];
 }
 
-export async function getCustomerMembershipData({ shop, customerId }) {
+function getOrderAmount(order) {
+  return (
+    order.currentTotalPriceSet?.shopMoney ??
+    order.totalPriceSet?.shopMoney ??
+    null
+  );
+}
+
+function getOrderPointStatus({ ledger, webhookEvent }) {
+  if (ledger) {
+    return "CREDITED";
+  }
+
+  if (webhookEvent?.status === "SKIPPED") {
+    return "SKIPPED";
+  }
+
+  if (webhookEvent?.status === "FAILED") {
+    return "FAILED";
+  }
+
+  return "ESTIMATED";
+}
+
+function getPointActivityLabel(ledger) {
+  if (ledger.sourceType === MANUAL_ADJUSTMENT_SOURCE_TYPE) {
+    return ledger.reason || "手动调整";
+  }
+
+  return ledger.orderName || ledger.reason || "积分变动";
+}
+
+async function getRecentCustomerOrderPoints({ admin, shop, customerId, ledgers }) {
+  if (!admin || !customerId?.startsWith("gid://shopify/Customer/")) {
+    return [];
+  }
+
+  const response = await admin.graphql(
+    `#graphql
+      query CustomerRecentOrders($id: ID!) {
+        customer(id: $id) {
+          orders(first: 5, reverse: true) {
+            nodes {
+              id
+              name
+              currentTotalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+              totalPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+              }
+            }
+          }
+        }
+      }`,
+    {
+      variables: {
+        id: customerId,
+      },
+    },
+  );
+  const responseJson = await response.json();
+  const orders = responseJson.data?.customer?.orders?.nodes ?? [];
+
+  if (orders.length === 0) {
+    return [];
+  }
+
+  const rule = await getOrCreateRuleConfig(shop);
+  const orderIds = orders.map((order) => order.id);
+  const [orderLedgers, webhookEvents] = await Promise.all([
+    db.pointsLedger.findMany({
+      where: {
+        shop,
+        sourceType: {
+          in: [
+            ORDER_PAID_SOURCE_TYPE,
+            ORDER_CANCELLED_SOURCE_TYPE,
+            ORDER_REFUNDED_SOURCE_TYPE,
+          ],
+        },
+        sourceId: {
+          in: orderIds,
+        },
+      },
+    }),
+    db.webhookEvent.findMany({
+      where: {
+        shop,
+        topic: "ORDERS_PAID",
+        resourceId: {
+          in: orderIds,
+        },
+      },
+    }),
+  ]);
+  const ledgerByOrderId = new Map(
+    [...ledgers, ...orderLedgers].map((ledger) => [ledger.sourceId, ledger]),
+  );
+  const webhookEventByOrderId = new Map(
+    webhookEvents.map((event) => [event.resourceId, event]),
+  );
+
+  return orders.map((order) => {
+    const money = getOrderAmount(order);
+    const estimatedPoints = calculateEarnedPoints(
+      parseMoneyToCents(money?.amount),
+      rule,
+    );
+    const ledger = ledgerByOrderId.get(order.id);
+    const webhookEvent = webhookEventByOrderId.get(order.id);
+
+    return {
+      id: order.id,
+      orderId: order.id,
+      orderName: order.name,
+      amount: money?.amount ?? null,
+      currencyCode: money?.currencyCode ?? null,
+      points: ledger?.points ?? estimatedPoints,
+      estimatedPoints,
+      creditedPoints: ledger?.points ?? null,
+      status: getOrderPointStatus({ ledger, webhookEvent }),
+      statusReason: webhookEvent?.error ?? null,
+    };
+  });
+}
+
+export async function getCustomerMembershipData({ admin, shop, customerId }) {
   const customerIdCandidates = getCustomerIdCandidates(customerId);
 
   if (!shop || customerIdCandidates.length === 0) {
@@ -147,7 +289,7 @@ export async function getCustomerMembershipData({ shop, customerId }) {
         pointsAccount: true,
         pointsLedgers: {
           orderBy: { createdAt: "desc" },
-          take: 1,
+          take: 10,
         },
       },
     }),
@@ -169,6 +311,46 @@ export async function getCustomerMembershipData({ shop, customerId }) {
   const levelRange = Math.max(1, nextThreshold - currentThreshold);
   const levelProgressPoints = Math.max(0, lifetimeEarned - currentThreshold);
   const latestLedger = member.pointsLedgers?.[0];
+  const hydratedLedgers = await hydrateLedgerOrderNames(shop, member.pointsLedgers);
+  const recentPointActivities = hydratedLedgers.slice(0, 5).map((ledger) => ({
+    id: ledger.id,
+    label: getPointActivityLabel(ledger),
+    orderId: ledger.orderId,
+    orderName: ledger.orderName,
+    type: ledger.type,
+    points: ledger.points,
+    reason: ledger.reason,
+    sourceType: ledger.sourceType,
+    createdAt: ledger.createdAt,
+  }));
+  let recentOrderPoints = hydratedLedgers
+    .filter((ledger) =>
+      [
+        ORDER_PAID_SOURCE_TYPE,
+        ORDER_CANCELLED_SOURCE_TYPE,
+        ORDER_REFUNDED_SOURCE_TYPE,
+      ].includes(ledger.sourceType),
+    )
+    .slice(0, 5)
+    .map((ledger) => ({
+      id: ledger.id,
+      orderName: ledger.orderName,
+      orderId: ledger.orderId,
+      type: ledger.type,
+      points: ledger.points,
+      reason: ledger.reason,
+      createdAt: ledger.createdAt,
+    }));
+  const recentCustomerOrderPoints = await getRecentCustomerOrderPoints({
+    admin,
+    shop,
+    customerId: member.customerId,
+    ledgers: member.pointsLedgers,
+  });
+
+  if (recentCustomerOrderPoints.length > 0) {
+    recentOrderPoints = recentCustomerOrderPoints;
+  }
 
   return {
     id: member.id,
@@ -196,6 +378,8 @@ export async function getCustomerMembershipData({ shop, customerId }) {
           createdAt: latestLedger.createdAt.toISOString(),
         }
       : null,
+    recentPointActivities,
+    recentOrderPoints,
     updatedAt: (account?.updatedAt ?? member.updatedAt).toISOString(),
   };
 }

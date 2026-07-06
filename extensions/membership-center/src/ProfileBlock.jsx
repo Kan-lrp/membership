@@ -2,6 +2,7 @@ import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { fetchMembership } from "./membershipApi";
+import { PointsDetails } from "./PointsDetails.jsx";
 
 export default async () => {
   render(<Extension />, document.body);
@@ -185,6 +186,7 @@ function Extension() {
                 })}
           </s-text>
         </s-stack>
+        <PointsDetails membership={membership} />
       </s-stack>
     </s-box>
   );

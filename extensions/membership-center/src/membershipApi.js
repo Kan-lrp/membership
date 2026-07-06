@@ -1,7 +1,7 @@
 /* global process */
 
 const MEMBERSHIP_ENDPOINT = "/api/membership";
-const DEFAULT_APP_URL = "https://judgment-clarity-hunt-text.trycloudflare.com";
+const DEFAULT_APP_URL = "https://sequence-remaining-leslie-manufacturing.trycloudflare.com";
 
 function getAppUrl() {
   let appUrl = DEFAULT_APP_URL;

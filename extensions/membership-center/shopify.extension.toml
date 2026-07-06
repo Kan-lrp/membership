@@ -17,7 +17,7 @@ uid = "aa04ae99-eaeb-b713-6011-f487bacf18434a2d57f5"
 
 [[extensions.targeting]]
 module = "./src/OrderIndexBlock.jsx"
-target = "customer-account.order-index.announcement.render"
+target = "customer-account.order-index.block.render"
 
 [[extensions.targeting]]
 module = "./src/ProfileBlock.jsx"

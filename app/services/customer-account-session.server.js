@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+const TOKEN_CLOCK_TOLERANCE_SECONDS = 60;
+
 function base64UrlDecode(value) {
   return Buffer.from(value, "base64url").toString("utf8");
 }
@@ -59,11 +61,11 @@ export function verifyCustomerAccountSessionToken(token) {
   const payload = JSON.parse(base64UrlDecode(encodedPayload));
   const now = Math.floor(Date.now() / 1000);
 
-  if (payload.exp && payload.exp < now) {
+  if (payload.exp && payload.exp + TOKEN_CLOCK_TOLERANCE_SECONDS < now) {
     throw new Error("Session token has expired.");
   }
 
-  if (payload.nbf && payload.nbf > now) {
+  if (payload.nbf && payload.nbf - TOKEN_CLOCK_TOLERANCE_SECONDS > now) {
     throw new Error("Session token is not active yet.");
   }
 

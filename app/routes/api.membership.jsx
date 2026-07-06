@@ -1,5 +1,6 @@
 import { getCustomerMembershipData } from "../services/members.server";
 import { verifyCustomerAccountSessionToken } from "../services/customer-account-session.server";
+import { unauthenticated } from "../shopify.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -59,7 +60,8 @@ export const loader = async ({ request }) => {
 
   try {
     const { shop, customerId } = verifyCustomerAccountSessionToken(token);
-    const membership = await getCustomerMembershipData({ shop, customerId });
+    const { admin } = await unauthenticated.admin(shop);
+    const membership = await getCustomerMembershipData({ admin, shop, customerId });
 
     console.log("[membership-api] loaded", {
       shop,
